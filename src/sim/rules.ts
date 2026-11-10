@@ -20,3 +20,7 @@ export function rulesFor(format: string): { life: number; cmdLethal: number; fre
       return { life: 20, cmdLethal: 0, freeMulligan: false }
   }
 }
+
+// Formats played with a commander (or an Oathbreaker): the table has a command zone.
+export const hasCommandZone = (format: string) =>
+  ['Commander', 'PreDH', 'Pauper Commander', 'Duel Commander', 'Oathbreaker', 'Brawl', 'Standard Brawl', 'Competitive Brawl'].includes(format)

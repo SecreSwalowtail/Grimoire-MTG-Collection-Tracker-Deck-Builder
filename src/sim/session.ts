@@ -3,7 +3,7 @@ import { useSyncExternalStore } from 'react'
 import type { CardDefs, SimDeck } from '@/sim/cards'
 import { act, canAttack, canBlock, newGame, restore, snapshot, viewFor, type Action, type Game, type Step } from '@/sim/engine'
 import { host as openHost, join as openJoin, localAddress, resolveAddress, type Link } from '@/sim/lan'
-import { rulesFor } from '@/sim/rules'
+import { hasCommandZone, rulesFor } from '@/sim/rules'
 import { createListeners } from '@/utils/listeners'
 
 // The game being played, for the Play screen. Three ways to play:
@@ -197,6 +197,7 @@ function begin() {
     startingLife: rules.life,
     cmdLethal: rules.cmdLethal,
     freeMulligan: rules.freeMulligan,
+    commandZone: decks.some((d) => d != null && (hasCommandZone(d.format) || d.cards.some((c) => c.commander))),
     first: null,
     seed: (Date.now() ^ Math.floor(Math.random() * 0x7fffffff)) | 0,
   })

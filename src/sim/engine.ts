@@ -172,6 +172,8 @@ export type Game = {
   // Combat damage from one commander that loses the game (21; 0: no such rule).
   cmdLethal: number
   freeMulligan: boolean
+  // The format has a command zone (shown on the table even while it's empty).
+  commandZone: boolean
   first: number
   // Turns each player has taken.
   turns: number[]
@@ -183,6 +185,7 @@ export type GameConfig = {
   startingLife: number
   cmdLethal: number
   freeMulligan: boolean
+  commandZone?: boolean
   // Who plays first; null: random.
   first: number | null
   seed: number
@@ -281,6 +284,7 @@ export function newGame(cfg: GameConfig): Game {
     startingLife: cfg.startingLife,
     cmdLethal: cfg.cmdLethal,
     freeMulligan: cfg.freeMulligan,
+    commandZone: cfg.commandZone ?? false,
     first: 0,
     turns: [0, 0],
   }
@@ -386,6 +390,8 @@ export function moveCard(g: Game, id: number, to: Zone, opts: MoveOptions = {}) 
     return
   }
   if (to === 'stack') return
+  // A card put in the command zone by hand becomes a commander (a deck without one marked).
+  if (to === 'command') c.commander = true
   const pl = g.players[to === 'battlefield' ? c.ctrl : c.owner]
   if (to === 'library' && opts.bottom) pl.library.unshift(id)
   else pl[to].push(id)

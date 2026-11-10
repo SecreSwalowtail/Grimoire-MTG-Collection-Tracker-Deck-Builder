@@ -187,6 +187,22 @@ export default function StatsScreen() {
             </TouchableOpacity>
           ))}
         </Card>
+
+        <Card index={4}>
+          <View style={styles.cardHead}>
+            <Text style={styles.heading}>How much of the deck is played</Text>
+            <Text style={styles.aside}><Text style={styles.asideStrong}>{pct(r.read)}</Text> of cards</Text>
+          </View>
+          <View style={styles.track}>
+            <Grow value={r.read} color={r.read < 0.8 ? '#C9573A' : Colors.gold} />
+          </View>
+          <Text style={styles.foot}>
+            {r.unread.length
+              ? `These have text the simulation doesn’t fully play, so they count as plain cards of their cost: ${r.unread.join(' · ')}.`
+              : 'Every card’s text is played, or doesn’t matter when the deck plays alone.'}
+          </Text>
+          <Text style={styles.foot}>You see {r.seen.toFixed(1)} cards by turn 10 on average, card draw included.</Text>
+        </Card>
       </>
     )
   }
@@ -366,7 +382,7 @@ export default function StatsScreen() {
         </View>
 
         <Text style={styles.note}>
-          Each game: London mulligans, then ten turns of drawing, playing a land and casting what the mana allows, biggest first. Card text isn’t played (card draw, tutors and ramp spells do nothing), so real games run a little smoother than this. Mana rocks and mana creatures are counted.
+          Each game: London mulligans, then ten turns of drawing, playing lands and casting what the mana allows, biggest first. Played from the cards’ text: card draw, looting, scry, land search and fetch lands, Treasures, rituals, tutors, tokens, burn, extra land drops, cycling, how each land comes in, mana rocks and mana creatures. Removal and other cards aimed at another player do nothing in a game alone. Cards it can’t fully play are listed in Overview.
         </Text>
       </ScrollView>
     </View>

@@ -2,7 +2,7 @@ import { BlurView } from 'expo-blur'
 import { Image } from 'expo-image'
 import type { RefObject } from 'react'
 import { Pressable, ScrollView, StyleSheet, Text, TouchableOpacity, useWindowDimensions, View } from 'react-native'
-import Animated, { FadeIn, FadeOut, ZoomIn } from 'react-native-reanimated'
+import Animated, { FadeIn, FadeOut } from 'react-native-reanimated'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
 import { OracleText } from '@/components/card/oracle-text'
@@ -49,7 +49,7 @@ export function CardPopup({
   ].filter(Boolean)
 
   return (
-    <Animated.View style={StyleSheet.absoluteFill} entering={FadeIn.duration(160)} exiting={FadeOut.duration(120)} accessibilityViewIsModal onAccessibilityEscape={onClose}>
+    <Animated.View style={StyleSheet.absoluteFill} entering={FadeIn.duration(140)} exiting={FadeOut.duration(110)} accessibilityViewIsModal onAccessibilityEscape={onClose}>
       <BlurView style={StyleSheet.absoluteFill} intensity={60} tint="dark" blurTarget={blurTarget} blurMethod="dimezisBlurViewSdk31Plus" />
       <View style={[StyleSheet.absoluteFill, styles.scrim]} />
       <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
@@ -58,7 +58,7 @@ export function CardPopup({
           onPress={onClose}
           accessibilityLabel="Put the card down"
         >
-          <Animated.View entering={ZoomIn.springify().damping(16).stiffness(220)} style={[styles.card, { width: cardWidth, height: cardHeight, borderRadius: Math.round(cardWidth * 0.05) }]}>
+          <View style={[styles.card, { width: cardWidth, height: cardHeight, borderRadius: Math.round(cardWidth * 0.05) }]}>
             {hidden ? (
               <View style={styles.back} />
             ) : face.image ? (
@@ -73,7 +73,7 @@ export function CardPopup({
                 {face.power != null && <Text style={styles.plainStats}>{face.power}/{face.toughness}</Text>}
               </View>
             )}
-          </Animated.View>
+          </View>
 
           {/* Taps on what follows don't put the card down. */}
           <View style={styles.below} onStartShouldSetResponder={() => true}>

@@ -458,7 +458,7 @@ export function cardGroups(
   const moves = (zones: Zone[]): SheetItem[] =>
     zones.filter((z) => z !== c.zone || z === 'library').flatMap((z) => {
       if (z === 'library') return [item('top', 'Top of library', I.top, move('library')), item('bot', 'Bottom of library', I.bottom, move('library', true))]
-      if (z === 'command') return c.commander ? [item('cmd', 'Command zone', I.crown, move('command'))] : []
+      if (z === 'command') return c.commander || g.commandZone ? [item('cmd', 'Command zone', I.crown, move('command'), c.commander ? {} : { sub: 'Makes it your commander' })] : []
       const label = { hand: 'Hand', battlefield: 'Battlefield', graveyard: 'Graveyard', exile: 'Exile' }[z as 'hand']
       const icon = { hand: I.hand, battlefield: I.play, graveyard: I.graveyard, exile: I.exile }[z as 'hand']
       return [item(z, label, icon, move(z))]

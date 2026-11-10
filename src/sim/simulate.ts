@@ -1,14 +1,17 @@
 import type { SimDeck } from '@/sim/cards'
 import { rulesFor } from '@/sim/rules'
 import { parseCost } from '@/sim/mana'
+import { readEffects, readFetch, type SimFx } from '@/sim/sim-effects'
 
 // Simulate: thousands of games of one deck on its own, to see how it draws. Each game shuffles,
-// takes London mulligans, then for ten turns draws, plays a land and casts what it can afford
+// takes London mulligans, then for ten turns draws, plays its lands and casts what it can afford
 // (the most expensive first), and attacks with its creatures.
 //
-// It doesn't read card text: card draw, tutors and ramp spells do nothing here. Lands, mana
-// rocks and mana creatures are counted, so the numbers are about the deck's mana and curve, and a
-// real game goes a little better than this.
+// It plays what it can read of the cards (sim-effects.ts): card draw, looting, scry, land search
+// and fetch lands, Treasures, rituals, tutors, tokens, burn, extra land drops, cycling, how each
+// land comes in (tapped, shock, check, fast, slow), mana rocks and mana creatures. Removal and
+// other cards aimed at another player do nothing here. Cards with text it can't play are named
+// in the report, so you know how far to trust the numbers.
 //
 // Written for speed (a million games on a phone): the deck is boiled down to numbers once, and a
 // game touches only small arrays.
@@ -28,13 +31,27 @@ type Card = {
   // The mana it makes when tapped: which colors, how much. 0: it isn't a mana source.
   makes: number
   amount: number
-  // Comes in tapped (lands), or can't tap the turn it arrives (creatures).
+  // Can't make mana the turn it arrives: a creature without haste, an artifact that enters tapped.
   slow: boolean
+  // Lands: when it comes in tapped (0 never, 1 always, 2 shock, 3 fast, 4 slow, 5 check, 6 unknown),
+  // the basic land types a check land looks for, and the ones this land has (bits, Plains first).
+  tapped: number
+  checks: number
+  landTypes: number
+  basic: boolean
+  // A fetch land: what it finds.
+  fetch: { types: number; basic: boolean; tapped: boolean } | null
+  // A spell with a land on its other face: what that land makes.
+  backLand: number
   power: number
   haste: boolean
   copies: number
   commander: boolean
+  fx: SimFx
 }
+
+const TYPE_BIT: Record<string, number> = { Plains: 1, Island: 2, Swamp: 4, Mountain: 8, Forest: 16 }
+const TAPPED_KIND: Record<string, number> = { never: 0, always: 1, shock: 2, fast: 3, slow: 4, check: 5, maybe: 6 }
 
 export type SimCardRow = {
   def: string
@@ -85,6 +102,11 @@ export type SimReport = {
   curve: { name: string; def: string; mv: number; value: number }[]
   cards: SimCardRow[]
   commanders: { name: string; def: string; mv: number; castTurn: number | null; byTurn: number[] }[]
+  // Cards whose text the simulation doesn't fully play, and the share of the deck's spells it does.
+  unread: string[]
+  read: number
+  // Cards seen by turn 10, on average (the opening hand, draws and card draw spells).
+  seen: number
   // For turns 1…10: share of games the creatures have dealt lethal damage to nobody's blockers
   // by then; and the average damage dealt so far.
   kill: number[]
@@ -123,6 +145,8 @@ export function createSimulation(deck: SimDeck): Simulation {
     const land = face.types.includes('Land')
     const creature = face.types.includes('Creature')
     const index = cards.length
+    const back = def.faces[1]
+    const rule = face.entersTapped
     cards.push({
       def: line.def,
       name: face.name,
@@ -131,11 +155,18 @@ export function createSimulation(deck: SimDeck): Simulation {
       pips,
       makes: face.produces.reduce((mask, c) => mask | BIT[c], 0),
       amount: face.produces.length ? face.manaAmount : 0,
-      slow: land ? face.entersTapped.kind === 'always' : creature && !face.keywords.includes('haste'),
+      slow: creature ? !face.keywords.includes('haste') : rule.kind === 'always',
+      tapped: TAPPED_KIND[rule.kind],
+      checks: rule.kind === 'check' ? rule.types.reduce((mask, t) => mask | (TYPE_BIT[t] ?? 0), 0) : 0,
+      landTypes: land ? face.subtypes.reduce((mask, t) => mask | (TYPE_BIT[t] ?? 0), 0) : 0,
+      basic: land && /\bBasic\b/.test(face.typeLine),
+      fetch: land ? readFetch(face.text) : null,
+      backLand: !land && def.layout === 'modal_dfc' && back?.types.includes('Land') ? back.produces.reduce((mask, c) => mask | BIT[c], 0) || 32 : 0,
       power: creature ? Math.max(0, face.power ?? 0) : 0,
       haste: face.keywords.includes('haste'),
       copies: line.n,
       commander: !!line.commander,
+      fx: readEffects(face.text, face.name, face.permanent, land, face.keywords),
     })
     for (let i = 0; i < line.n; i++) (line.commander ? command : library).push(index)
   }
@@ -182,6 +213,7 @@ export function createSimulation(deck: SimDeck): Simulation {
   const castSum = new Array<number>(C).fill(0)
   const castGames = new Array<number>(C).fill(0)
   const drawnGames = new Array<number>(C).fill(0)
+  let seenCards = 0
   const cmdByTurn = cards.map(() => new Array<number>(TURNS + 1).fill(0))
 
   // ---- One game's working memory ----
@@ -199,22 +231,6 @@ export function createSimulation(deck: SimDeck): Simulation {
     seed ^= seed >>> 17
     seed ^= seed << 5
     return ((seed >>> 0) % n) | 0
-  }
-
-  // Whether the mana on the battlefield pays for the colored symbols in `need`.
-  const colorsOk = () => {
-    for (let k = 0; k < groups.length; k++) {
-      const s = groups[k]
-      let want = 0
-      if (s & 1) want += need[0]
-      if (s & 2) want += need[1]
-      if (s & 4) want += need[2]
-      if (s & 8) want += need[3]
-      if (s & 16) want += need[4]
-      if (s & 32) want += need[5]
-      if (want > cover[s]) return false
-    }
-    return true
   }
 
   function play() {
@@ -292,7 +308,7 @@ export function createSimulation(deck: SimDeck): Simulation {
     cover.fill(0)
     let mana = 0
     let lands = 0
-    let landsPlayed = 0
+    let typesOut = 0
     let streak = true
     // Mana that arrives next turn (tapped lands, creatures that can't tap yet).
     let lateMask: number[] = []
@@ -301,11 +317,138 @@ export function createSimulation(deck: SimDeck): Simulation {
     let fresh = 0
     let dealt = 0
     let dead = false
+    // Treasures (kept until spent) and ritual mana (this turn only): mana of any color.
+    let treasure = 0
+    let burst = 0
+    let landsPerTurn = 1
+    let drawsPerTurn = 0
+    let seen = hand.length
     const onDraw = (g & 1) === 1
     const addSource = (mask: number, amount: number) => {
+      if (!amount) return
       mana += amount
       for (let k = 0; k < groups.length; k++) if (groups[k] & mask) cover[groups[k]] += amount
     }
+    const draw = () => {
+      if (top >= N) return
+      const c = order[top++]
+      hand.push(c)
+      seen++
+      if (stamp[c] !== g) {
+        stamp[c] = g
+        drawnGames[c]++
+      }
+    }
+    // The card in hand the deck needs least: a land when it has plenty, else the dearest spell.
+    const discard = () => {
+      if (!hand.length) return
+      const many = lands + landsInHand() > 6
+      let at = 0
+      let worst = -1
+      for (let i = 0; i < hand.length; i++) {
+        const c = cards[hand[i]]
+        const score = c.land ? (many ? 100 : -1) : c.mv
+        if (score > worst) {
+          worst = score
+          at = i
+        }
+      }
+      hand.splice(at, 1)
+    }
+    // A land comes onto the battlefield: now, or tapped (its mana from next turn).
+    const enter = (card: Card, forceTapped: boolean) => {
+      let isTapped = forceTapped
+      if (!isTapped) {
+        if (card.tapped === 1 || card.tapped === 6) isTapped = true
+        else if (card.tapped === 3) isTapped = lands > 2
+        else if (card.tapped === 4) isTapped = lands < 2
+        else if (card.tapped === 5) isTapped = (typesOut & card.checks) === 0
+      }
+      lands++
+      typesOut |= card.landTypes
+      if (isTapped) {
+        lateMask.push(card.makes)
+        lateAmount.push(card.amount)
+      } else addSource(card.makes, card.amount)
+    }
+    // Takes a land out of the library: one of these types (0: any), a basic or not; the one that
+    // adds a color the deck is missing, if there's a choice. -1: none left.
+    const findLand = (types: number, basic: boolean) => {
+      let found = -1
+      let best = -1
+      for (let i = top; i < N; i++) {
+        const card = cards[order[i]]
+        if (!card.land || (basic && !card.basic) || (types && !(card.landTypes & types))) continue
+        let score = 0
+        for (let k = 0; k < colorBits.length; k++) if (card.makes & colorBits[k] && cover[colorBits[k]] === 0) score++
+        if (score > best) {
+          best = score
+          found = i
+        }
+      }
+      if (found < 0) return -1
+      const c = order[found]
+      order[found] = order[top]
+      order[top] = c
+      top++
+      return c
+    }
+    // Scry and surveil: lands go to the bottom when there are plenty, spells that are far too
+    // expensive when lands are short.
+    const scry = (n: number) => {
+      for (let i = 0; i < n && top < N; i++) {
+        const card = cards[order[top]]
+        const have = lands + landsInHand()
+        const unwanted = card.land ? have >= 6 : have < 3 && card.mv > have + 2
+        if (!unwanted) return
+        const j = top + 1 + random(Math.max(1, N - top - 1))
+        if (j < N) {
+          const t = order[top]
+          order[top] = order[j]
+          order[j] = t
+        }
+      }
+    }
+    const resolve = (fx: SimFx) => {
+      for (let i = 0; i < fx.lands; i++) {
+        const c = findLand(0, fx.landsBasic)
+        if (c < 0) break
+        if (fx.landsToHand) hand.push(c)
+        else enter(cards[c], fx.landsTapped)
+      }
+      if (fx.tutor) {
+        // The card it wants: a land when it's short of them, else the most expensive spell it
+        // could cast within two turns.
+        let found = -1
+        let best = -1
+        const short = lands + landsInHand() < 4
+        for (let i = top; i < N; i++) {
+          const card = cards[order[i]]
+          const score = card.land ? (short ? 100 : -1) : card.mv <= lands + 2 ? card.mv : 0
+          if (score > best) {
+            best = score
+            found = i
+          }
+        }
+        if (found >= 0) {
+          const c = order[found]
+          order[found] = order[top]
+          order[top] = c
+          top++
+          hand.push(c)
+        }
+      }
+      if (fx.scry) scry(fx.scry)
+      for (let i = 0; i < fx.draw; i++) draw()
+      for (let i = 0; i < fx.discard; i++) discard()
+      treasure += fx.treasure
+      burst += fx.ritual
+      fresh += fx.tokenPower
+      dealt += fx.burn
+      landsPerTurn += fx.extraLands
+      drawsPerTurn += fx.drawEachTurn
+    }
+
     let openColors = 0
     for (let i = 0; i < hand.length; i++) if (cards[hand[i]].land) openColors |= cards[hand[i]].makes
     if ((openColors & used) === used) openerColors++
@@ -318,120 +461,189 @@ export function createSimulation(deck: SimDeck): Simulation {
       }
       ready += fresh
       fresh = 0
-      if ((turn > 1 || onDraw) && top < N) {
-        const c = order[top++]
-        hand.push(c)
-        if (stamp[c] !== g) {
-          stamp[c] = g
-          drawnGames[c]++
-        }
-      }
+      burst = 0
+      if (turn > 1 || onDraw) draw()
+      for (let i = 0; i < drawsPerTurn; i++) draw()
 
-      // The land for the turn: one that comes in untapped if that lets a spell be cast now,
-      // a tapped one otherwise; among those, the one that adds a color the deck is missing.
-      let pick = -1
-      let best = -1
-      let wantsUntapped = false
-      for (let i = 0; i < hand.length; i++) {
-        const c = cards[hand[i]]
-        if (!c.land && c.mv === mana + 1) wantsUntapped = true
-      }
-      for (let i = 0; i < hand.length; i++) {
-        const c = cards[hand[i]]
-        if (!c.land) continue
-        let score = 1
-        for (let k = 0; k < colorBits.length; k++) if (c.makes & colorBits[k] && cover[colorBits[k]] === 0) score += 4
-        if (c.slow !== wantsUntapped) score += 2
-        if (score > best) {
-          best = score
-          pick = i
-        }
-      }
-      if (pick >= 0) {
-        const c = cards[hand[pick]]
-        hand.splice(pick, 1)
-        lands++
-        landsPlayed++
-        if (c.slow) {
-          lateMask.push(c.makes)
-          lateAmount.push(c.amount)
-        } else addSource(c.makes, c.amount)
-      }
-      if (landsPlayed < turn) streak = false
-      if (streak) drops[turn]++
-      for (let k = 0; k < colorBits.length; k++) if (cover[colorBits[k]] > 0) colorTurn[k][turn]++
-      if (turn === 4) {
-        if (lands <= 2) screw++
-        let every = true
-        for (let k = 0; k < colorBits.length; k++) if (cover[colorBits[k]] === 0) every = false
-        if (every) allColors++
-      }
-      if (turn === 6 && lands + landsInHand() >= 7) flood++
-      available[turn] += mana
-
-      // On curve: each card in hand whose mana value is this turn, castable right now?
+      let landsPlayed = 0
       need.fill(0)
-      for (let i = 0; i < hand.length; i++) {
-        const c = hand[i]
-        const card = cards[c]
-        if (card.land || card.mv !== turn || curveStamp[c] === g * 16 + turn) continue
-        curveStamp[c] = g * 16 + turn
-        curveTries[c]++
-        if (card.mv <= mana) {
-          for (let k = 0; k < 6; k++) need[k] = card.pips[k]
-          if (colorsOk()) curveHits[c]++
-        }
-      }
-
-      // Cast the most expensive thing that fits, again and again (the commander too).
-      need.fill(0)
-      let left = mana
+      let left = 0
+      let spentNow = 0
       let cast = 0
-      for (;;) {
+      let checkedCurve = false
+      // Lands, then spells, again and again: a spell may draw a land or more spells.
+      for (let round = 0; round < 40; round++) {
+        let progress = false
+
+        // The land for the turn: one that comes in untapped if that lets a spell be cast now,
+        // a tapped one otherwise; among those, the one that adds a color the deck is missing.
+        while (landsPlayed < landsPerTurn) {
+          let pick = -1
+          let best = -1
+          let wantsUntapped = false
+          for (let i = 0; i < hand.length; i++) {
+            const c = cards[hand[i]]
+            if (!c.land && c.mv === mana + 1) wantsUntapped = true
+          }
+          for (let i = 0; i < hand.length; i++) {
+            const c = cards[hand[i]]
+            // A spell with a land on its back is played as a land only when there's no other.
+            if (!c.land && !(c.backLand && lands < 4)) continue
+            let score = c.land ? 10 : 1
+            const makes = c.land ? c.makes : c.backLand
+            for (let k = 0; k < colorBits.length; k++) if (makes & colorBits[k] && cover[colorBits[k]] === 0) score += 4
+            const slow = c.tapped === 1 || c.tapped === 6
+            if (slow !== wantsUntapped) score += 2
+            // Best of all: a land that lets a spell in hand be cast this very turn.
+            if (!slow) {
+              for (let j = 0; j < hand.length; j++) {
+                const spell = cards[hand[j]]
+                if (spell.land || spell.mv > mana + 1 || spell.mv < 1) continue
+                let pays = true
+                for (let b = 0; b < 6; b++) if (spell.pips[b] && !(makes & (1 << b)) && cover[1 << b] < spell.pips[b]) pays = false
+                if (pays) {
+                  score += 16 + spell.mv
+                  break
+                }
+              }
+            }
+            if (score > best) {
+              best = score
+              pick = i
+            }
+          }
+          if (pick < 0) break
+          const c = cards[hand[pick]]
+          hand.splice(pick, 1)
+          landsPlayed++
+          progress = true
+          const before = mana
+          if (!c.land) {
+            // The land on the back of a spell: comes in tapped more often than not.
+            lands++
+            lateMask.push(c.backLand)
+            lateAmount.push(1)
+          } else if (c.fetch) {
+            // Sacrificed for the land it finds.
+            const found = findLand(c.fetch.types === 31 ? 0 : c.fetch.types, c.fetch.basic)
+            if (found >= 0) enter(cards[found], c.fetch.tapped)
+          } else enter(c, false)
+          left += mana - before
+        }
+
+        if (round === 0) {
+          left = mana
+          if (landsPlayed < 1) streak = false
+          if (streak) drops[turn]++
+          for (let k = 0; k < colorBits.length; k++) if (cover[colorBits[k]] > 0) colorTurn[k][turn]++
+          if (turn === 4) {
+            if (lands <= 2) screw++
+            let every = true
+            for (let k = 0; k < colorBits.length; k++) if (cover[colorBits[k]] === 0) every = false
+            if (every) allColors++
+          }
+          available[turn] += mana
+        }
+
+        // On curve: each card in hand whose mana value is this turn, castable right now?
+        if (!checkedCurve) {
+          checkedCurve = true
+          for (let i = 0; i < hand.length; i++) {
+            const c = hand[i]
+            const card = cards[c]
+            if (card.land || card.mv !== turn || curveStamp[c] === g * 16 + turn) continue
+            curveStamp[c] = g * 16 + turn
+            curveTries[c]++
+            if (card.mv <= mana + treasure) {
+              for (let k = 0; k < 6; k++) need[k] = card.pips[k]
+              let lack = 0
+              for (let k = 0; k < groups.length; k++) {
+                const s = groups[k]
+                let want = 0
+                for (let b = 0; b < 6; b++) if (s & (1 << b)) want += need[b]
+                if (want - cover[s] > lack) lack = want - cover[s]
+              }
+              if (lack <= treasure) curveHits[c]++
+            }
+          }
+          need.fill(0)
+        }
+
+        // Cast the most expensive thing that fits (the commander too). Treasures and ritual
+        // mana fill in for mana or colors the lands can't give.
         let at = -1
         let which = -1
         let cost = -1
+        let wild = 0
         for (let i = 0; i < hand.length + command.length; i++) {
           const fromHand = i < hand.length
           const c = fromHand ? hand[i] : command[i - hand.length]
           const card = cards[c]
-          if (card.land || card.mv > left || card.mv <= cost) continue
+          if (card.land || card.mv > left + treasure + burst || card.mv <= cost) continue
           if (!fromHand && castStamp[c] === g) continue
-          for (let k = 0; k < 6; k++) need[k] += card.pips[k]
-          const ok = colorsOk()
-          if (!ok) for (let k = 0; k < 6; k++) need[k] -= card.pips[k]
-          else {
-            // Kept as the candidate: take its symbols back out until it's chosen.
-            for (let k = 0; k < 6; k++) need[k] -= card.pips[k]
-            at = fromHand ? i : -1
-            which = c
-            cost = card.mv
+          let lack = 0
+          for (let k = 0; k < groups.length; k++) {
+            const s = groups[k]
+            let want = 0
+            for (let b = 0; b < 6; b++) if (s & (1 << b)) want += need[b] + card.pips[b]
+            if (want - cover[s] > lack) lack = want - cover[s]
+          }
+          const extra = Math.max(lack, card.mv - left)
+          if (extra > treasure + burst) continue
+          at = fromHand ? i : -1
+          which = c
+          cost = card.mv
+          wild = Math.max(0, extra)
+        }
+        if (which >= 0) {
+          const card = cards[which]
+          progress = true
+          if (!wild) for (let k = 0; k < 6; k++) need[k] += card.pips[k]
+          const fromBurst = Math.min(burst, wild)
+          burst -= fromBurst
+          treasure -= wild - fromBurst
+          left -= card.mv - wild
+          spentNow += card.mv
+          cast++
+          if (at >= 0) hand.splice(at, 1)
+          if (castStamp[which] !== g) {
+            castStamp[which] = g
+            castSum[which] += turn
+            castGames[which]++
+            if (card.commander) for (let t = turn; t <= TURNS; t++) cmdByTurn[which][t]++
+          }
+          if (card.makes && !card.land) {
+            if (card.slow) {
+              lateMask.push(card.makes)
+              lateAmount.push(card.amount)
+            } else {
+              // A mana rock taps the turn it arrives.
+              addSource(card.makes, card.amount)
+              left += card.amount
+            }
+          }
+          if (card.power) {
+            if (card.haste) ready += card.power * card.fx.strikes
+            else fresh += card.power * card.fx.strikes
+          }
+          resolve(card.fx)
+        } else if (left + treasure > 0) {
+          // Nothing to cast: cycle a card that's stuck in hand.
+          for (let i = 0; i < hand.length; i++) {
+            const card = cards[hand[i]]
+            if (card.fx.cycling < 0 || card.fx.cycling > left || (!card.land && card.mv <= lands + 1)) continue
+            left -= card.fx.cycling
+            spentNow += card.fx.cycling
+            hand.splice(i, 1)
+            draw()
+            progress = true
+            break
           }
         }
-        if (which < 0) break
-        const card = cards[which]
-        for (let k = 0; k < 6; k++) need[k] += card.pips[k]
-        left -= card.mv
-        cast++
-        if (at >= 0) hand.splice(at, 1)
-        if (castStamp[which] !== g) {
-          castStamp[which] = g
-          castSum[which] += turn
-          castGames[which]++
-          if (card.commander) for (let t = turn; t <= TURNS; t++) cmdByTurn[which][t]++
-        }
-        if (card.makes) {
-          lateMask.push(card.makes)
-          lateAmount.push(card.amount)
-        }
-        if (card.power) {
-          if (card.haste) ready += card.power
-          else fresh += card.power
-        }
-        // A free spell would loop forever.
-        if (card.mv === 0 && cast > 12) break
+        if (!progress || cast > 30) break
       }
-      spent[turn] += mana - left
+      if (turn === 6 && lands + landsInHand() >= 7) flood++
+      spent[turn] += Math.min(spentNow, mana + 12)
       if (cast) active[turn]++
 
       dealt += ready
@@ -442,7 +654,10 @@ export function createSimulation(deck: SimDeck): Simulation {
         kills++
         for (let t = turn; t <= TURNS; t++) kill[t]++
       }
+      // Hand size.
+      while (hand.length > 7) discard()
     }
+    seenCards += seen
   }
 
   const share = (n: number, of: number) => (of ? n / of : 0)
@@ -535,6 +750,9 @@ export function createSimulation(deck: SimDeck): Simulation {
       active: active.slice(1).map((n) => share(n, games)),
       curve,
       cards: rows,
+      unread: cards.filter((c) => !c.fx.read).map((c) => c.name),
+      read: share(cards.reduce((n, c) => n + (c.fx.read ? c.copies : 0), 0), cards.reduce((n, c) => n + c.copies, 0)),
+      seen: share(seenCards, games),
       commanders: cards.filter((c) => c.commander).map((c) => {
         const i = cards.indexOf(c)
         return { name: c.name, def: c.def, mv: c.mv, castTurn: castGames[i] ? castSum[i] / castGames[i] : null, byTurn: cmdByTurn[i].slice(1).map((n) => share(n, games)) }

@@ -1,7 +1,7 @@
 import { Image } from 'expo-image'
 import { useEffect, type ReactNode } from 'react'
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native'
-import Animated, { useAnimatedStyle, useSharedValue, withSpring, withTiming } from 'react-native-reanimated'
+import Animated, { Easing, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated'
 
 import { SymbolText } from '@/components/card/oracle-text'
 
@@ -103,14 +103,14 @@ export function CardView({
   const small = width < 50
 
   // Tapping turns the card on its side; chosen and fighting cards lift off the table.
-  const lift = selected ? -5 : mark === 'attack' ? -7 : mark === 'block' ? -4 : 0
+  const lift = selected ? -3 : mark === 'attack' ? -5 : mark === 'block' ? -3 : 0
   const turn = useSharedValue(tapped ? 90 : 0)
   const rise = useSharedValue(lift)
   useEffect(() => {
-    turn.set(withTiming(tapped ? 90 : 0, { duration: 180 }))
+    turn.set(withTiming(tapped ? 90 : 0, { duration: 160, easing: Easing.out(Easing.cubic) }))
   }, [turn, tapped])
   useEffect(() => {
-    rise.set(withSpring(lift, { damping: 14, stiffness: 220 }))
+    rise.set(withTiming(lift, { duration: 140, easing: Easing.out(Easing.cubic) }))
   }, [rise, lift])
   const motion = useAnimatedStyle(() => ({ transform: [{ translateY: rise.get() }, { rotate: `${turn.get()}deg` }] }))
 

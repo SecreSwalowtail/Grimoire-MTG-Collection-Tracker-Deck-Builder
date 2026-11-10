@@ -4,12 +4,13 @@ import { router } from 'expo-router'
 import { usePreventRemove } from 'expo-router/react-navigation'
 import { useEffect, useRef, useState } from 'react'
 import { ScrollView, StyleSheet, Text, TouchableOpacity, useWindowDimensions, View } from 'react-native'
-import Animated, { FadeIn, FadeInDown, FadeInUp, FadeOut, LinearTransition, ZoomIn, ZoomOut } from 'react-native-reanimated'
+import Animated, { FadeIn, FadeOut, LinearTransition, useAnimatedStyle, useSharedValue } from 'react-native-reanimated'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
 import { SymbolText } from '@/components/card/oracle-text'
 import { PathIcon } from '@/components/deck/parts'
 import { CardPopup } from '@/components/sim/card-popup'
+import { Draggable } from '@/components/sim/draggable'
 import { HandCard } from '@/components/sim/hand-card'
 import { CardView, CARD_RATIO, I, PoolRow } from '@/components/sim/parts'
 import { cardGroups, TableSheets, type TableSheet } from '@/components/sim/sheets'
@@ -45,8 +46,14 @@ export default function PlayScreen() {
 
   // The card held up close.
   const [popup, setPopup] = useState<number | null>(null)
-  // A card from the hand is being dragged: the table is where it lands.
-  const [dragging, setDragging] = useState(false)
+  // The card being dragged (a copy of it follows the finger, above everything), and the places
+  // it can be dropped: this player's side of the table, piles, command zone and hand.
+  const [drag, setDrag] = useState<number | null>(null)
+  const dragX = useSharedValue(0)
+  const dragY = useSharedValue(0)
+  const spots = useRef<Record<string, View | null>>({})
+  const boxes = useRef<Record<string, { x: number; y: number; w: number; h: number }>>({})
+  const ghostStyle = useAnimatedStyle(() => ({ transform: [{ translateX: dragX.get() - 36 }, { translateY: dragY.get() - 80 }] }))
   const table = useRef<View>(null)
   const [sheet, setSheet] = useState<TableSheet | null>(null)
   // The permanent being attached to something (tap its new host).
@@ -62,7 +69,11 @@ export default function PlayScreen() {
   const [note, setNote] = useState<{ text: string; bad?: boolean } | null>(null)
   const [leaving, setLeaving] = useState(false)
 
-  usePreventRemove(g != null && !leaving, () => setSheet({ t: 'leave' }))
+  // Going back puts down a card held up close; otherwise it asks before leaving the game.
+  usePreventRemove(g != null && !leaving, () => {
+    if (popup != null) setPopup(null)
+    else setSheet({ t: 'leave' })
+  })
   useEffect(() => {
     if (!leaving) return
     leave()
@@ -214,6 +225,38 @@ export default function PlayScreen() {
     else if (face.types.includes('Land')) act({ t: 'land', id: c.id })
     else if (/\{X\}/.test(face.cost)) setSheet({ t: 'cast', id: c.id, face: 0 })
     else act({ t: 'cast', id: c.id })
+    thump()
+  }
+
+  // ---- Dragging cards ----
+
+  const startDrag = (id: number) => {
+    setDrag(id)
+    tick()
+    for (const [key, view] of Object.entries(spots.current)) {
+      view?.measureInWindow((x, y, w, h) => {
+        boxes.current[key] = { x, y, w, h }
+      })
+    }
+  }
+
+  // Let go over a pile, the command zone or the hand: the card goes there. Over the table: a
+  // card from the hand is played or cast (the rules apply); anything else stays where it was.
+  const dropCard = (id: number, x: number, y: number) => {
+    setDrag(null)
+    const c = g.cards[id]
+    if (!c || x < 0) return
+    const over = (key: string) => {
+      const b = boxes.current[key]
+      return b != null && x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h
+    }
+    const spot = (['graveyard', 'exile', 'library', 'command', 'hand', 'battlefield'] as const).find(over)
+    if (!spot || spot === c.zone) return
+    if (spot === 'battlefield') {
+      if (c.zone === 'hand') playFromHand(c)
+      return
+    }
+    act({ t: 'move', id, to: spot })
     thump()
   }
 
@@ -370,18 +413,20 @@ export default function PlayScreen() {
         const letter = c.attacking != null && g.combat.length > 1 ? attackerLetter(c.id) : blocking != null && g.combat.length > 1 ? attackerLetter(blocking) : undefined
         const target = Object.values(attack).includes(c.id)
         return (
-          <Animated.View key={c.id} entering={ZoomIn.duration(220)} exiting={ZoomOut.duration(160)} layout={LinearTransition.duration(200)}>
-            <CardView
-              g={g}
-              c={c}
-              width={cardWidth}
-              selected={blocker === c.id || pick === c.id}
-              mark={attacking || target ? 'attack' : blocking != null ? 'block' : pick != null && pick !== c.id ? 'pick' : undefined}
-              label={letter}
-              onPress={() => tapCard(c)}
-              onLongPress={() => holdCard(c)}
-            />
-          </Animated.View>
+          <Draggable key={c.id} id={c.id} x={dragX} y={dragY} hold onStart={startDrag} onDrop={dropCard}>
+            <Animated.View entering={FadeIn.duration(160)} exiting={FadeOut.duration(120)} layout={LinearTransition.duration(160)} style={drag === c.id && styles.lifted}>
+              <CardView
+                g={g}
+                c={c}
+                width={cardWidth}
+                selected={blocker === c.id || pick === c.id}
+                mark={attacking || target ? 'attack' : blocking != null ? 'block' : pick != null && pick !== c.id ? 'pick' : undefined}
+                label={letter}
+                onPress={() => tapCard(c)}
+                onLongPress={attackMode ? () => holdCard(c) : undefined}
+              />
+            </Animated.View>
+          </Draggable>
         )
       })}
     </ScrollView>
@@ -407,15 +452,18 @@ export default function PlayScreen() {
         accessibilityRole="button"
         accessibilityLabel={`${p === me ? 'Your' : `${who.name}’s`} ${label.toLowerCase()}, ${ids.length} cards`}
       >
-        <View style={[styles.pileCard, { width: pileWidth, height: Math.round(pileWidth * CARD_RATIO) }, zone === 'library' && ids.length > 0 && styles.pileDeck, !ids.length && styles.pileEmpty]}>
+        <View
+          ref={p === me ? (view) => { spots.current[zone] = view } : undefined}
+          style={[styles.pileCard, { width: pileWidth, height: Math.round(pileWidth * CARD_RATIO) }, zone === 'library' && ids.length > 0 && styles.pileDeck, !ids.length && styles.pileEmpty, p === me && drag != null && styles.dropHere]}
+        >
           {zone === 'library' ? (ids.length > 0 && <View style={styles.pileBack} />) : topId != null ? (
-            <Animated.View key={topId} entering={FadeIn.duration(200)} style={StyleSheet.absoluteFill} pointerEvents="none">
+            <Animated.View key={topId} entering={FadeIn.duration(150)} style={StyleSheet.absoluteFill} pointerEvents="none">
               <CardView g={g} c={g.cards[topId]} width={pileWidth} plain />
             </Animated.View>
           ) : null}
-          <Animated.View key={ids.length} entering={ZoomIn.duration(180)} style={styles.pileCount}>
+          <View style={styles.pileCount}>
             <Text style={styles.pileCountText}>{ids.length}</Text>
-          </Animated.View>
+          </View>
         </View>
         {!small && <Text style={styles.pileLabel}>{label}</Text>}
       </TouchableOpacity>
@@ -425,19 +473,23 @@ export default function PlayScreen() {
   // The command zone, in a corner of its player's side: the commanders waiting there, or an
   // empty spot while they're out.
   const commandSpot = (p: number, small: boolean) => {
-    if (!g.cards.some((c) => c.commander && c.owner === p)) return null
+    if (!g.commandZone && !g.cards.some((c) => c.commander && c.owner === p)) return null
     const ids = g.players[p].command
     const spotWidth = small ? 30 : 40
     return (
-      <View style={styles.pile} accessibilityLabel={`${p === me ? 'Your' : `${g.players[p].name}’s`} command zone, ${ids.length} cards`}>
+      <View
+        ref={p === me ? (view) => { spots.current.command = view } : undefined}
+        style={styles.pile}
+        accessibilityLabel={`${p === me ? 'Your' : `${g.players[p].name}’s`} command zone, ${ids.length} cards`}
+      >
         <View style={styles.commandRow}>
           {ids.length ? ids.map((id) => (
-            <Animated.View key={id} entering={ZoomIn.duration(220)} exiting={ZoomOut.duration(160)}>
-              <CardView g={g} c={g.cards[id]} width={spotWidth} plain onPress={() => setPopup(id)} onLongPress={() => setPopup(id)} />
+            <Animated.View key={id} entering={FadeIn.duration(160)} exiting={FadeOut.duration(120)}>
+              <CardView g={g} c={g.cards[id]} width={spotWidth} plain onPress={() => setPopup(id)} />
             </Animated.View>
           )) : (
-            <View style={[styles.pileCard, styles.pileEmpty, styles.commandEmpty, { width: spotWidth, height: Math.round(spotWidth * CARD_RATIO) }]}>
-              <PathIcon d={I.crown} color={Colors.textMuted} size={small ? 12 : 16} />
+            <View style={[styles.pileCard, styles.commandEmpty, { width: spotWidth, height: Math.round(spotWidth * CARD_RATIO) }, p === me && drag != null && styles.dropHere]}>
+              <PathIcon d={I.crown} color={Colors.goldLight} size={small ? 12 : 16} />
             </View>
           )}
         </View>
@@ -467,7 +519,7 @@ export default function PlayScreen() {
         <View style={styles.piles}>
           {!top && (
             <TouchableOpacity style={styles.pile} onPress={() => setSheet({ t: 'tokens' })} accessibilityRole="button" accessibilityLabel="Add a token">
-              <View style={[styles.pileCard, styles.pileEmpty, styles.commandEmpty, { width: 40, height: Math.round(40 * CARD_RATIO) }]}>
+              <View style={[styles.pileCard, styles.pileEmpty, { width: 40, height: Math.round(40 * CARD_RATIO) }]}>
                 <PathIcon d={I.plus} color="#CFC7B4" size={16} weight={2} />
               </View>
               <Text style={styles.pileLabel}>Token</Text>
@@ -484,7 +536,11 @@ export default function PlayScreen() {
       lands.length ? row(lands, small, 'lands') : null,
       edge,
     ]
-    return <View style={[styles.half, top && styles.halfTop, !top && dragging && styles.halfDrop]}>{top ? rows.reverse() : rows}</View>
+    return (
+      <View ref={top ? undefined : (view) => { spots.current.battlefield = view }} style={[styles.half, top && styles.halfTop, !top && drag != null && g.cards[drag]?.zone === 'hand' && styles.halfDrop]}>
+        {top ? rows.reverse() : rows}
+      </View>
+    )
   }
 
   const lifeBox = (p: number) => {
@@ -496,7 +552,7 @@ export default function PlayScreen() {
           <Text style={styles.lifeSign}>−</Text>
         </TouchableOpacity>
         <View style={styles.lifeMiddle} accessible accessibilityLabel={`${who.name}: ${who.life} life${extra ? `, ${extra}` : ''}`}>
-          <Animated.Text key={who.life} entering={ZoomIn.duration(200)} style={[styles.lifeValue, p !== me && { color: '#A9C4E2' }]}>{who.life}</Animated.Text>
+          <Text style={[styles.lifeValue, p !== me && { color: '#A9C4E2' }]}>{who.life}</Text>
           <Text style={styles.lifeLabel} numberOfLines={1}>{extra || who.name}</Text>
         </View>
         <TouchableOpacity style={styles.lifeButton} onPress={() => act({ t: 'life', p, by: 1 })} accessibilityRole="button" accessibilityLabel={`${who.name} life plus 1`}>
@@ -539,7 +595,7 @@ export default function PlayScreen() {
           <TouchableOpacity style={styles.divider} onPress={() => setSheet({ t: 'stack' })} disabled={!top} accessibilityRole="button" accessibilityLabel={top ? `The stack: ${top.label} on top, ${g.stack.length} in all` : 'The stack is empty'}>
             <View style={styles.rule} />
             {top ? (
-              <Animated.View key={top.sid} entering={ZoomIn.springify().damping(14)} exiting={FadeOut.duration(140)} style={styles.stackPill}>
+              <Animated.View key={top.sid} entering={FadeIn.duration(140)} exiting={FadeOut.duration(120)} style={styles.stackPill}>
                 <PathIcon d={I.bolt} color={Colors.onGold} size={13} weight={2.2} />
                 <Text style={styles.stackText} numberOfLines={1}>{top.label}{g.stack.length > 1 ? ` +${g.stack.length - 1}` : ''}</Text>
               </Animated.View>
@@ -551,14 +607,14 @@ export default function PlayScreen() {
         )}
         {half(me, false)}
         {banner.shown && (
-          <Animated.View key={banner.turn} entering={FadeInDown.duration(220)} exiting={FadeOut.duration(260)} style={styles.banner} pointerEvents="none">
+          <Animated.View key={banner.turn} entering={FadeIn.duration(180)} exiting={FadeOut.duration(240)} style={styles.banner} pointerEvents="none">
             <Text style={styles.bannerTurn}>Turn {g.turn}</Text>
             <Text style={styles.bannerWho} numberOfLines={1}>{alone ? 'Untap, upkeep, draw' : g.players[g.active].name}</Text>
           </Animated.View>
         )}
       </View>
 
-      <View style={styles.hand} accessibilityLabel={`Your hand, ${hand.length} cards`}>
+      <View ref={(view) => { spots.current.hand = view }} style={styles.hand} accessibilityLabel={`Your hand, ${hand.length} cards`}>
         {hand.map((c, i) => (
           <HandCard
             key={c.id}
@@ -568,9 +624,12 @@ export default function PlayScreen() {
             left={Math.round(start + i * step)}
             offset={i - (hand.length - 1) / 2}
             order={i + 1}
+            dragging={drag === c.id}
+            dragX={dragX}
+            dragY={dragY}
             onTap={() => tapCard(c)}
-            onPlay={() => playFromHand(c)}
-            onDrag={setDragging}
+            onDragStart={startDrag}
+            onDrop={dropCard}
           />
         ))}
       </View>
@@ -598,7 +657,7 @@ export default function PlayScreen() {
       </BlurTargetView>
 
       {note && !sheet && !prompt && !held && (
-        <Animated.View key={note.text} entering={FadeInUp.duration(180)} exiting={FadeOut.duration(160)} style={[styles.toast, note.bad && styles.toastBad, { bottom: insets.bottom + 236 }]} accessibilityRole="alert" accessibilityLiveRegion="polite" pointerEvents="none">
+        <Animated.View key={note.text} entering={FadeIn.duration(150)} exiting={FadeOut.duration(150)} style={[styles.toast, note.bad && styles.toastBad, { bottom: insets.bottom + 236 }]} accessibilityRole="alert" accessibilityLiveRegion="polite" pointerEvents="none">
           <SymbolText text={note.text} style={styles.toastText} size={13} />
         </Animated.View>
       )}
@@ -653,6 +712,12 @@ export default function PlayScreen() {
               )
             })}
           </View>
+        </Animated.View>
+      )}
+
+      {drag != null && g.cards[drag] && (
+        <Animated.View style={[styles.ghost, ghostStyle]} pointerEvents="none">
+          <CardView g={g} c={g.cards[drag]} width={72} plain />
         </Animated.View>
       )}
 
@@ -835,7 +900,26 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-start',
   },
   halfDrop: {
-    backgroundColor: 'rgba(212,166,74,0.07)',
+    backgroundColor: 'rgba(212,166,74,0.06)',
+  },
+  // Where a dragged card can be dropped.
+  dropHere: {
+    borderWidth: 1.5,
+    borderStyle: 'solid',
+    borderColor: Colors.gold,
+  },
+  // The card being dragged, where it was.
+  lifted: {
+    opacity: 0.25,
+  },
+  // Its copy under the finger, above everything.
+  ghost: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    zIndex: 1000,
+    elevation: 30,
+    boxShadow: '0 14px 30px rgba(0,0,0,0.6)',
   },
   edge: {
     paddingHorizontal: 10,
@@ -916,25 +1000,27 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   commandEmpty: {
-    alignItems: 'center',
-    justifyContent: 'center',
+    backgroundColor: 'rgba(212,166,74,0.06)',
+    borderWidth: 1.5,
+    borderStyle: 'dashed',
+    borderColor: 'rgba(212,166,74,0.5)',
   },
   banner: {
     position: 'absolute',
     alignSelf: 'center',
     top: '42%',
-    paddingVertical: 10,
-    paddingHorizontal: 22,
-    borderRadius: 18,
+    paddingVertical: 8,
+    paddingHorizontal: 18,
+    borderRadius: 16,
     borderWidth: 1,
-    borderColor: 'rgba(212,166,74,0.45)',
-    backgroundColor: 'rgba(23,21,15,0.94)',
+    borderColor: 'rgba(212,166,74,0.3)',
+    backgroundColor: 'rgba(23,21,15,0.92)',
     alignItems: 'center',
     boxShadow: '0 16px 40px rgba(0,0,0,0.6)',
   },
   bannerTurn: {
-    fontSize: 30,
-    lineHeight: 34,
+    fontSize: 22,
+    lineHeight: 26,
     fontFamily: Fonts.serif,
     color: Colors.goldLight,
   },

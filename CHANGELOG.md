@@ -3,6 +3,11 @@
 What changed in each release of Grimoire. Downloads are on the
 [Releases](https://github.com/SecreSwalowtail/Grimoire/releases) page.
 
+## Unreleased
+
+- Simulator (Settings, Tools): play a deck alone, both sides of a matchup on one
+  phone, or against someone on a second phone on the same Wi-Fi or hotspot.
+
 ## 1.0.0
 
 The first release.

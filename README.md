@@ -48,6 +48,10 @@ collection stays on your phone.
 - **Decks**: decks and folders, a commander slot with partner rules, main deck, sideboard and
   maybe list, stats (curve, colors, types) and a legality check per format. Add cards straight
   from the deck's search, change copies with − / +, and drag cards between parts of the deck.
+- **Simulator** (in Settings, Tools): play your decks out by hand, on your own, both sides yourself, or against a
+  friend on a second phone over the same Wi-Fi (nothing goes over the internet). The app runs the
+  rules: mulligans, the turn and its steps, priority and the stack, mana, combat, commander rules.
+  What a card's text does, you carry out yourself, like at a table.
 - **Your currency**: prices in euros, dollars or your own currency, converted with the European
   Central Bank's daily rates.
 - **Bring your collection**: import a collection or a decklist exported from Manabox (text or

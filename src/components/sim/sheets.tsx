@@ -3,7 +3,6 @@ import { useState } from 'react'
 import { StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native'
 
 import { PrimaryButton } from '@/components/controls'
-import { OracleText } from '@/components/card/oracle-text'
 import { ActionSheet, I, type SheetGroup, type SheetItem } from '@/components/sim/parts'
 import { Colors, Fonts } from '@/constants/theme'
 import { MANA, TOKENS, type Mana, type SimFace, type TokenSpec } from '@/sim/cards'
@@ -25,7 +24,6 @@ export type TableSheet =
   | { t: 'cmdDamage' }
   | { t: 'leave' }
   | { t: 'zone'; owner: number; zone: 'graveyard' | 'exile' | 'command' | 'library' }
-  | { t: 'card'; id: number; back?: TableSheet }
   | { t: 'cast'; id: number; face: number }
   | { t: 'mana'; id: number }
   | { t: 'scry'; n: number }
@@ -78,7 +76,7 @@ export function TableSheets({
   act,
   prefs,
   onPrefs,
-  onPick,
+  onCard,
   onSwitch,
   onNewGame,
   onLeave,
@@ -93,8 +91,8 @@ export function TableSheets({
   act: (a: Action) => void
   prefs: Prefs
   onPrefs: (prefs: Prefs) => void
-  // Pick a permanent on the table to attach this one to.
-  onPick: (id: number) => void
+  // Holds a card up close (the Play screen's pop-out), from a list.
+  onCard: (id: number) => void
   onSwitch: () => void
   onNewGame: () => void
   onLeave: () => void
@@ -103,6 +101,8 @@ export function TableSheets({
   const [fate, setFate] = useState<Record<number, 'top' | 'bottom' | 'graveyard'>>({})
   const [tokenName, setTokenName] = useState('')
   const [tokenStats, setTokenStats] = useState('')
+  const [query, setQuery] = useState('')
+  let search: { value: string; onChange: (text: string) => void; placeholder: string } | undefined
 
   const pl = g.players[me]
   const opp = g.players[1 - me]
@@ -110,6 +110,7 @@ export function TableSheets({
     // Stop looking at the library.
     if (sheet && (sheet.t === 'scry' || (sheet.t === 'zone' && sheet.zone === 'library')) && pl.looking) act({ t: 'look', n: 0 })
     setFate({})
+    setQuery('')
     setSheet(null)
   }
   const item = (key: string, label: string, icon: string, run: () => void, more: Partial<SheetItem> = {}): SheetItem => ({ key, label, icon, run, ...more })
@@ -310,7 +311,15 @@ export function TableSheets({
     // The same card once, with how many there are (library).
     const seen = new Map<string, number>()
     if (sheet.zone === 'library') for (const id of ids) seen.set(g.cards[id].def, (seen.get(g.cards[id].def) ?? 0) + 1)
-    const listed = sheet.zone === 'library' ? ids.filter((id, i) => ids.findIndex((o) => g.cards[o].def === g.cards[id].def) === i) : ids
+    const text = query.trim().toLowerCase()
+    const matches = (id: number) => {
+      if (!text) return true
+      const face = faceOf(g, g.cards[id])
+      return `${face.name} ${face.typeLine} ${face.text}`.toLowerCase().includes(text)
+    }
+    const listed = (sheet.zone === 'library' ? ids.filter((id, i) => ids.findIndex((o) => g.cards[o].def === g.cards[id].def) === i) : ids).filter(matches)
+    if (ids.length > 6) search = { value: query, onChange: setQuery, placeholder: sheet.zone === 'library' ? 'Search by name, type or text' : 'Search these cards' }
+    if (ids.length && !listed.length) hint = 'No card matches.'
     groups = [{
       cols: 1,
       items: listed.map((id) => {
@@ -322,8 +331,7 @@ export function TableSheets({
           label: known ? face.name : 'Loading…',
           sub: sheet.zone === 'library' ? `${seen.get(c.def)} left · ${face.typeLine}` : face.typeLine,
           art: face.thumb,
-          keepOpen: true,
-          run: () => setSheet({ t: 'card', id, back: sheet }),
+          run: () => onCard(id),
         }
       }),
     }]
@@ -406,33 +414,6 @@ export function TableSheets({
         }}
       />
     ) : null
-  } else if (sheet.t === 'card') {
-    const c = g.cards[sheet.id]
-    const def = g.defs[c.def]
-    const face = faceOf(g, c)
-    const back = sheet.back
-    title = def ? face.name : 'Hidden card'
-    tall = true
-    if (back) onBack = () => setSheet(back)
-    if (def) {
-      header = (
-        <View style={styles.cardHead}>
-          <View style={styles.cardArt}>
-            {face.image ? <Image source={{ uri: face.image }} style={StyleSheet.absoluteFill} contentFit="cover" /> : null}
-          </View>
-          <View style={styles.cardText}>
-            <Text style={styles.cardType}>{face.typeLine}</Text>
-            {def.faces.map((f, i) => (
-              <View key={i} style={styles.cardFace}>
-                {def.faces.length > 1 && <Text style={styles.faceName}>{f.name}</Text>}
-                {f.text ? <OracleText text={f.text} /> : null}
-              </View>
-            ))}
-          </View>
-        </View>
-      )
-      groups = cardGroups(g, me, c, act, setSheet, onPick, sheet.back)
-    }
   }
 
   return (
@@ -444,6 +425,7 @@ export function TableSheets({
       header={header}
       footer={footer}
       tall={tall}
+      search={search}
       onBack={onBack}
       onClose={close}
     />
@@ -451,14 +433,14 @@ export function TableSheets({
 }
 
 // Everything that can be done with one card, by where it is.
-function cardGroups(
+export function cardGroups(
   g: Game,
   me: number,
   c: Inst,
   act: (a: Action) => void,
   setSheet: (sheet: TableSheet | null) => void,
+  // Pick a permanent on the table to attach this one to.
   onPick: (id: number) => void,
-  from: TableSheet | undefined,
 ): SheetGroup[] {
   const def = g.defs[c.def]
   const face = faceOf(g, c)
@@ -471,7 +453,6 @@ function cardGroups(
     act({ t: 'move', id, to, bottom })
     if (fromLibrary) {
       if (to !== 'library') act({ t: 'shuffle' })
-      act({ t: 'look', n: 0 })
     }
   }
   const moves = (zones: Zone[]): SheetItem[] =>
@@ -540,7 +521,6 @@ function cardGroups(
     item('copy', 'Copy as a token', I.copy, () => act({ t: 'copy', id })),
     ...(!g.players[1 - c.ctrl].dummy ? [item('control', `Give to ${g.players[1 - c.ctrl].name}`, I.swap, () => act({ t: 'control', id }), { sub: 'Change of control' })] : []),
   ]
-  void from
   return [
     { cols: 2, items: now },
     { title: 'Abilities', cols: 1, items: stack },
@@ -642,33 +622,5 @@ const styles = StyleSheet.create({
   },
   choiceLabelOn: {
     color: '#F0D8A0',
-  },
-  cardHead: {
-    flexDirection: 'row',
-    gap: 14,
-  },
-  cardArt: {
-    width: 132,
-    height: 184,
-    borderRadius: 8,
-    overflow: 'hidden',
-    backgroundColor: Colors.surfaceRaised,
-  },
-  cardText: {
-    flex: 1,
-    gap: 8,
-  },
-  cardType: {
-    fontSize: 13,
-    fontFamily: Fonts.bold,
-    color: Colors.textSecondary,
-  },
-  cardFace: {
-    gap: 4,
-  },
-  faceName: {
-    fontSize: 13,
-    fontFamily: Fonts.extraBold,
-    color: Colors.goldLight,
   },
 })

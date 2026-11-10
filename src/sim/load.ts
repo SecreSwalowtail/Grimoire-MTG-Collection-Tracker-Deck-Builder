@@ -2,27 +2,7 @@ import type { SQLiteDatabase } from 'expo-sqlite'
 
 import { getCardRows } from '@/db/cards'
 import { compileBare, compileCard, type CardDefs, type SimDeck } from '@/sim/cards'
-import { getDeckStore, isCommander, type DeckFormat } from '@/utils/deck-store'
-
-// What a format changes about a game between two players: starting life, how much combat damage
-// from one commander loses the game (0: no such rule), and whether the first mulligan is free.
-export function rulesFor(format: string): { life: number; cmdLethal: number; freeMulligan: boolean } {
-  switch (format as DeckFormat) {
-    case 'Commander':
-    case 'PreDH':
-      return { life: 40, cmdLethal: 21, freeMulligan: false }
-    case 'Pauper Commander':
-      return { life: 30, cmdLethal: 16, freeMulligan: false }
-    case 'Duel Commander':
-      return { life: 20, cmdLethal: 21, freeMulligan: false }
-    case 'Brawl':
-    case 'Standard Brawl':
-    case 'Competitive Brawl':
-      return { life: 25, cmdLethal: 0, freeMulligan: true }
-    default:
-      return { life: 20, cmdLethal: 0, freeMulligan: false }
-  }
-}
+import { getDeckStore, isCommander } from '@/utils/deck-store'
 
 // A deck's main deck as the simulator plays it, with each card's rules data read from the phone.
 // Sideboard and maybe cards stay out; commanders start in the command zone.

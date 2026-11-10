@@ -3,7 +3,7 @@ import { useSyncExternalStore } from 'react'
 import type { CardDefs, SimDeck } from '@/sim/cards'
 import { act, canAttack, canBlock, newGame, restore, snapshot, viewFor, type Action, type Game, type Step } from '@/sim/engine'
 import { host as openHost, join as openJoin, localAddress, resolveAddress, type Link } from '@/sim/lan'
-import { rulesFor } from '@/sim/load'
+import { rulesFor } from '@/sim/rules'
 import { createListeners } from '@/utils/listeners'
 
 // The game being played, for the Play screen. Three ways to play:

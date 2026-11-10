@@ -51,7 +51,9 @@ collection stays on your phone.
 - **Simulator** (in Settings, Tools): play your decks out by hand, on your own, both sides yourself, or against a
   friend on a second phone over the same Wi-Fi (nothing goes over the internet). The app runs the
   rules: mulligans, the turn and its steps, priority and the stack, mana, combat, commander rules.
-  What a card's text does, you carry out yourself, like at a table.
+  What a card's text does, you carry out yourself, like at a table. Or simulate up to a million
+  games of a deck on its own and read how it draws: opening hands and mulligans, land drops,
+  colors, what's castable on curve.
 - **Your currency**: prices in euros, dollars or your own currency, converted with the European
   Central Bank's daily rates.
 - **Bring your collection**: import a collection or a decklist exported from Manabox (text or

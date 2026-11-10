@@ -91,28 +91,34 @@ export function costValue(cost: string) {
 }
 
 function manaAbility(text: string, produced: string[] | undefined) {
-  // "{T}: Add {B} or {R}.", also inside reminder text on lands with basic types.
-  const plain = /(?:^|\n|\()\{T\}: Add ([^.\n]+)\./.exec(text)
+  const none = { produces: [] as Mana[], manaAmount: 1, sacForMana: false }
+  // Every "{T}: Add …" line, also inside reminder text on lands with basic types and with a life
+  // payment ("{T}, Pay 1 life: Add {W} or {B}."). A land with several ("{T}: Add {C}." and
+  // "{T}: Add {B} or {R}. It deals 1 damage to you.") taps for any of them.
+  const clauses = [...text.matchAll(/(?:^|\n|\()\{T\}(?:, Pay \d+ life)?: Add ([^.\n]+)\./g)].map((m) => m[1])
   const sac = /\{T\}, Sacrifice [^:\n]*: Add one mana of any color/.test(text)
-  if (!plain && !sac) return { produces: [] as Mana[], manaAmount: 1, sacForMana: false }
-  const clause = plain?.[1] ?? 'one mana of any color'
-  let colors = MANA.filter((c) => clause.includes(`{${c}}`))
+  if (!clauses.length && !sac) return none
+  if (!clauses.length) clauses.push('one mana of any color')
+  const colors: Mana[] = []
   let amount = 1
-  if (/any (one )?(color|type)|chosen color|color identity/.test(clause)) {
-    // "Any color in your commander's identity" and the like: Scryfall lists what it can make.
-    const listed = COLORS.filter((c) => produced?.includes(c))
-    colors = listed.length ? listed : COLORS
-    if (/\btwo mana\b/.test(clause)) amount = 2
-    if (/\bthree mana\b/.test(clause)) amount = 3
-  } else if (colors.length === 1) {
-    // "{C}{C}": the same symbol repeated.
-    amount = clause.split(`{${colors[0]}}`).length - 1
-  } else if (!/\bor\b/.test(clause) && colors.length > 1) {
-    // "{R}{G}" (both at once): played as one of them, the players add the other by hand.
-    amount = 1
+  for (const clause of clauses) {
+    let made = MANA.filter((c) => clause.includes(`{${c}}`))
+    if (/any (one )?(color|type)|chosen color|color identity/.test(clause)) {
+      // "Any color in your commander's identity" and the like: Scryfall lists what it can make.
+      const listed = COLORS.filter((c) => produced?.includes(c))
+      made = listed.length ? listed : COLORS
+      if (clauses.length === 1 && /\btwo mana\b/.test(clause)) amount = 2
+      if (clauses.length === 1 && /\bthree mana\b/.test(clause)) amount = 3
+    } else if (made.length === 1 && clauses.length === 1) {
+      // "{C}{C}": the same symbol repeated.
+      amount = clause.split(`{${made[0]}}`).length - 1
+    }
+    for (const c of made) if (!colors.includes(c)) colors.push(c)
   }
-  if (!colors.length) return { produces: [] as Mana[], manaAmount: 1, sacForMana: false }
-  return { produces: colors, manaAmount: Math.max(1, amount), sacForMana: !plain && sac }
+  if (!colors.length) return none
+  // Colors first, colorless last: a land that makes either is usually tapped for its color.
+  colors.sort((a, b) => MANA.indexOf(a) - MANA.indexOf(b))
+  return { produces: colors, manaAmount: Math.max(1, amount), sacForMana: !text.includes('{T}: Add') && sac }
 }
 
 function entersTapped(text: string): EntersTapped {

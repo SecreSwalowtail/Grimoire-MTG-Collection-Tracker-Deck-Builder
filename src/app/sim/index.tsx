@@ -6,16 +6,20 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
 import { PathIcon } from '@/components/deck/parts'
 import { DeckThumb } from '@/components/decks/parts'
+import { GamesSlider } from '@/components/sim/games-slider'
 import { NearbySheet } from '@/components/sim/nearby-sheet'
 import { I } from '@/components/sim/parts'
 import { Colors, Fonts } from '@/constants/theme'
 import { exactSize } from '@/rules/deck-stats'
-import { loadSimDeck, rulesFor } from '@/sim/load'
+import { loadSimDeck } from '@/sim/load'
+import { rulesFor } from '@/sim/rules'
 import { hostGame, joinGame, startSolo, useSession } from '@/sim/session'
+import { startRun, useRun } from '@/sim/sim-run'
 import { deckCardCount, useDeckStore, type Deck } from '@/utils/deck-store'
 
 // Simulator (design S1), opened from Settings › Tools: pick your deck and who it plays against, then play it out by hand on this
-// phone, or against someone on a second phone nearby.
+// phone or against someone on a second phone nearby, or simulate thousands of games of the deck
+// on its own and read the statistics.
 
 type Slot = 'me' | 'opp'
 // The opponent: a deck id, or nobody ("goldfish": your deck on its own).
@@ -36,6 +40,8 @@ export default function SimulatorScreen() {
   const [nearby, setNearby] = useState(false)
   const [busy, setBusy] = useState(false)
   const [problem, setProblem] = useState<string | null>(null)
+  const [games, setGames] = useState(40000)
+  const run = useRun()
 
   const size = (d: Deck) => deckCardCount(d, store)
   const wanted = (d: Deck) => exactSize(d.format) ?? 60
@@ -77,6 +83,26 @@ export default function SimulatorScreen() {
       router.push('/sim/play')
     } catch (e) {
       console.warn('Starting a game failed', e)
+      setProblem('That deck couldn’t be read.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const simulate = async () => {
+    if (!myDeck || busy) return
+    setBusy(true)
+    setProblem(null)
+    try {
+      const deck = await loadSimDeck(db, myDeck.id)
+      if (!deck) {
+        setProblem('That deck couldn’t be read.')
+        return
+      }
+      startRun(deck, games)
+      router.push('/sim/run')
+    } catch (e) {
+      console.warn('Starting a simulation failed', e)
       setProblem('That deck couldn’t be read.')
     } finally {
       setBusy(false)
@@ -143,7 +169,7 @@ export default function SimulatorScreen() {
   return (
     <View style={styles.root}>
       <View style={styles.glow} pointerEvents="none" />
-      <ScrollView contentContainerStyle={[styles.content, { paddingTop: insets.top + 6, paddingBottom: insets.bottom + 190 }]} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+      <ScrollView contentContainerStyle={[styles.content, { paddingTop: insets.top + 6, paddingBottom: insets.bottom + 330 }]} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
         <TouchableOpacity style={styles.back} onPress={() => router.back()} accessibilityRole="button">
           <PathIcon d={I.back} color={Colors.text} size={22} weight={2} />
           <Text style={styles.backLabel}>Settings</Text>
@@ -151,7 +177,7 @@ export default function SimulatorScreen() {
 
         <View style={styles.head}>
           <Text style={styles.title} accessibilityRole="header">Simulator</Text>
-          <Text style={styles.lead}>Play your decks out by hand, with the rules of the game keeping track: alone, both sides yourself, or against a friend on a second phone.</Text>
+          <Text style={styles.lead}>Play your decks out by hand, with the rules of the game keeping track: alone, both sides yourself, or against a friend on a second phone. Or simulate thousands of games and see how the deck draws.</Text>
         </View>
 
         <View style={styles.slots}>
@@ -266,6 +292,28 @@ export default function SimulatorScreen() {
             </View>
             <Text style={[styles.buttonSub, { color: '#3D2F12' }]}>{oppDeck ? 'both sides, this phone' : 'on your own'}</Text>
           </TouchableOpacity>
+        </View>
+        <View style={styles.simulate}>
+          <View style={styles.simulateTop}>
+            <Text style={styles.simulateLabel}>Simulate your deck</Text>
+            <Text style={styles.simulateGames}>{games.toLocaleString('en-US')} games</Text>
+          </View>
+          <GamesSlider value={games} onChange={setGames} />
+          <View style={styles.buttons}>
+            {run.status !== 'idle' && (
+              <TouchableOpacity style={[styles.button, styles.buttonPlain]} onPress={() => router.push(run.status === 'done' ? '/sim/stats' : '/sim/run')} accessibilityRole="button">
+                <Text style={styles.buttonLabel}>{run.status === 'done' ? 'Last results' : 'Running…'}</Text>
+                <Text style={styles.buttonSub} numberOfLines={1}>{run.deck?.name}</Text>
+              </TouchableOpacity>
+            )}
+            <TouchableOpacity style={[styles.button, styles.buttonOutline, (!myDeck || busy) && styles.off]} onPress={simulate} disabled={!myDeck || busy} accessibilityRole="button">
+              <View style={styles.buttonRow}>
+                <PathIcon d="M4 19V10M10 19V5M16 19v-7M21 19H3" color={Colors.goldLight} size={18} weight={2} />
+                <Text style={[styles.buttonLabel, { color: Colors.goldLight }]}>Simulate</Text>
+              </View>
+              <Text style={styles.buttonSub}>opening hands, mana, curve</Text>
+            </TouchableOpacity>
+          </View>
         </View>
       </View>
 
@@ -588,8 +636,40 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.gold,
     boxShadow: '0 10px 26px rgba(212,166,74,0.22)',
   },
+  buttonOutline: {
+    flex: 1.35,
+    borderWidth: 1,
+    borderColor: 'rgba(212,166,74,0.45)',
+    backgroundColor: 'rgba(212,166,74,0.08)',
+  },
   off: {
     opacity: 0.45,
+  },
+  simulate: {
+    padding: 12,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    backgroundColor: Colors.surface,
+    gap: 4,
+  },
+  simulateTop: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    justifyContent: 'space-between',
+  },
+  simulateLabel: {
+    fontSize: 12,
+    fontFamily: Fonts.extraBold,
+    letterSpacing: 1.4,
+    textTransform: 'uppercase',
+    color: Colors.textSecondary,
+  },
+  simulateGames: {
+    fontSize: 15,
+    fontFamily: Fonts.extraBold,
+    fontVariant: ['tabular-nums'],
+    color: Colors.goldLight,
   },
   buttonRow: {
     flexDirection: 'row',

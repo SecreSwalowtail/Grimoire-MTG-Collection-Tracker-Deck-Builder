@@ -6,7 +6,8 @@ What changed in each release of Grimoire. Downloads are on the
 ## Unreleased
 
 - Simulator (Settings, Tools): play a deck alone, both sides of a matchup on one
-  phone, or against someone on a second phone on the same Wi-Fi or hotspot.
+  phone, or against someone on a second phone on the same Wi-Fi or hotspot. Or simulate 1,000 to
+  1,000,000 games of a deck and get statistics on its opening hands, mana and curve.
 
 ## 1.0.0
 

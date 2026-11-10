@@ -1,6 +1,9 @@
 import { Image } from 'expo-image'
-import type { ReactNode } from 'react'
-import { Pressable, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native'
+import { useEffect, type ReactNode } from 'react'
+import { Pressable, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native'
+import Animated, { useAnimatedStyle, useSharedValue, withSpring, withTiming } from 'react-native-reanimated'
+
+import { SymbolText } from '@/components/card/oracle-text'
 
 import { Sheet, SheetHeader } from '@/components/controls'
 import { CROWN, PathIcon } from '@/components/deck/parts'
@@ -99,6 +102,18 @@ export function CardView({
   const strong = selected || mark != null
   const small = width < 50
 
+  // Tapping turns the card on its side; chosen and fighting cards lift off the table.
+  const lift = selected ? -5 : mark === 'attack' ? -7 : mark === 'block' ? -4 : 0
+  const turn = useSharedValue(tapped ? 90 : 0)
+  const rise = useSharedValue(lift)
+  useEffect(() => {
+    turn.set(withTiming(tapped ? 90 : 0, { duration: 180 }))
+  }, [turn, tapped])
+  useEffect(() => {
+    rise.set(withSpring(lift, { damping: 14, stiffness: 220 }))
+  }, [rise, lift])
+  const motion = useAnimatedStyle(() => ({ transform: [{ translateY: rise.get() }, { rotate: `${turn.get()}deg` }] }))
+
   const words = [
     hidden ? 'Hidden card' : face.name,
     c.token ? 'token' : '',
@@ -118,13 +133,12 @@ export function CardView({
       accessibilityLabel={words.filter(Boolean).join(', ')}
       accessibilityState={{ selected: !!selected }}
     >
-      <View
+      <Animated.View
         style={[
           styles.card,
           { width, height, borderRadius: Math.max(4, Math.round(width * 0.08)), borderColor: border, borderWidth: strong ? 2 : 1 },
           mark === 'pick' && { borderStyle: 'dashed' },
-          tapped && { transform: [{ rotate: '90deg' }] },
-          selected && !tapped && { transform: [{ translateY: -5 }] },
+          motion,
         ]}
       >
         {hidden ? (
@@ -169,7 +183,7 @@ export function CardView({
             <Text style={styles.letterText}>{label}</Text>
           </View>
         )}
-      </View>
+      </Animated.View>
     </Pressable>
   )
 }
@@ -207,7 +221,51 @@ export type SheetItem = {
 }
 export type SheetGroup = { title?: string; cols: 1 | 2; items: SheetItem[] }
 
-// The design's sheet of actions: groups of buttons under small headings.
+// Groups of action buttons under small headings (the sheets, and the card held up close).
+// Mana written as {G} in a label is drawn as its symbol.
+export function GroupList({ groups, onDone }: { groups: SheetGroup[]; onDone: () => void }) {
+  return (
+    <>
+      {groups.filter((group) => group.items.length).map((group, i) => (
+        <View key={group.title ?? i} style={styles.group}>
+          {group.title ? <Text style={styles.groupTitle} accessibilityRole="header">{group.title}</Text> : null}
+          <View style={styles.grid}>
+            {group.items.map((item) => (
+              <TouchableOpacity
+                key={item.key}
+                style={[styles.item, group.cols === 2 && styles.itemHalf, item.on && styles.itemOn]}
+                onPress={() => {
+                  item.run()
+                  if (!item.keepOpen) onDone()
+                }}
+                accessibilityRole={item.on != null ? 'switch' : 'button'}
+                accessibilityState={item.on != null ? { checked: item.on } : undefined}
+              >
+                {item.art !== undefined ? (
+                  <View style={styles.itemArt}>
+                    {item.art ? <Image source={{ uri: item.art }} style={StyleSheet.absoluteFill} contentFit="cover" /> : <View style={styles.back} />}
+                  </View>
+                ) : item.mana ? (
+                  <ManaSymbol symbol={item.mana} size={26} />
+                ) : item.icon ? (
+                  <View style={[styles.itemIcon, item.danger && { backgroundColor: 'rgba(238,132,102,0.12)' }]}>
+                    <PathIcon d={item.on ? I.check : item.icon} color={item.danger ? Colors.danger : Colors.goldLight} size={17} weight={2} />
+                  </View>
+                ) : null}
+                <View style={styles.itemText}>
+                  <SymbolText text={item.label} style={[styles.itemLabel, item.danger && { color: Colors.danger }]} size={14} />
+                  {item.sub ? <SymbolText text={item.sub} style={styles.itemSub} size={12} /> : null}
+                </View>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </View>
+      ))}
+    </>
+  )
+}
+
+// The design's sheet of actions. `search`: a search field above the list.
 export function ActionSheet({
   visible,
   title,
@@ -216,6 +274,7 @@ export function ActionSheet({
   header,
   footer,
   tall,
+  search,
   onBack,
   onClose,
 }: {
@@ -227,50 +286,33 @@ export function ActionSheet({
   footer?: ReactNode
   // Fills the screen (long lists).
   tall?: boolean
+  search?: { value: string; onChange: (text: string) => void; placeholder: string }
   onBack?: () => void
   onClose: () => void
 }) {
   return (
     <Sheet visible={visible} onClose={onClose} fullHeight={tall}>
       <SheetHeader title={title} onClose={onClose} onBack={onBack} />
+      {search && (
+        <View style={styles.search}>
+          <PathIcon d={I.search} color={Colors.textSecondary} size={18} weight={1.75} />
+          <TextInput
+            style={styles.searchInput}
+            value={search.value}
+            onChangeText={search.onChange}
+            placeholder={search.placeholder}
+            placeholderTextColor={Colors.textMuted}
+            accessibilityLabel={search.placeholder}
+            autoCorrect={false}
+            returnKeyType="search"
+            clearButtonMode="while-editing"
+          />
+        </View>
+      )}
       <ScrollView style={tall ? styles.scrollTall : styles.scroll} contentContainerStyle={styles.sheetBody} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
-        {hint ? <Text style={styles.hint}>{hint}</Text> : null}
+        {hint ? <SymbolText text={hint} style={styles.hint} size={14} /> : null}
         {header}
-        {groups.filter((group) => group.items.length).map((group, i) => (
-          <View key={group.title ?? i} style={styles.group}>
-            {group.title ? <Text style={styles.groupTitle} accessibilityRole="header">{group.title}</Text> : null}
-            <View style={styles.grid}>
-              {group.items.map((item) => (
-                <TouchableOpacity
-                  key={item.key}
-                  style={[styles.item, group.cols === 2 && styles.itemHalf, item.on && styles.itemOn]}
-                  onPress={() => {
-                    item.run()
-                    if (!item.keepOpen) onClose()
-                  }}
-                  accessibilityRole={item.on != null ? 'switch' : 'button'}
-                  accessibilityState={item.on != null ? { checked: item.on } : undefined}
-                >
-                  {item.art !== undefined ? (
-                    <View style={styles.itemArt}>
-                      {item.art ? <Image source={{ uri: item.art }} style={StyleSheet.absoluteFill} contentFit="cover" /> : <View style={styles.back} />}
-                    </View>
-                  ) : item.mana ? (
-                    <ManaSymbol symbol={item.mana} size={26} />
-                  ) : item.icon ? (
-                    <View style={[styles.itemIcon, item.danger && { backgroundColor: 'rgba(238,132,102,0.12)' }]}>
-                      <PathIcon d={item.on ? I.check : item.icon} color={item.danger ? Colors.danger : Colors.goldLight} size={17} weight={2} />
-                    </View>
-                  ) : null}
-                  <View style={styles.itemText}>
-                    <Text style={[styles.itemLabel, item.danger && { color: Colors.danger }]} numberOfLines={2}>{item.label}</Text>
-                    {item.sub ? <Text style={styles.itemSub} numberOfLines={3}>{item.sub}</Text> : null}
-                  </View>
-                </TouchableOpacity>
-              ))}
-            </View>
-          </View>
-        ))}
+        <GroupList groups={groups} onDone={onClose} />
         {footer}
       </ScrollView>
     </Sheet>
@@ -400,6 +442,26 @@ const styles = StyleSheet.create({
   poolCount: {
     fontSize: 12,
     fontFamily: Fonts.extraBold,
+    color: Colors.text,
+  },
+  search: {
+    height: 46,
+    marginBottom: 12,
+    paddingHorizontal: 14,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(237,230,214,0.12)',
+    backgroundColor: Colors.background,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  searchInput: {
+    flex: 1,
+    height: 46,
+    padding: 0,
+    fontSize: 15,
+    fontFamily: Fonts.medium,
     color: Colors.text,
   },
   scroll: {

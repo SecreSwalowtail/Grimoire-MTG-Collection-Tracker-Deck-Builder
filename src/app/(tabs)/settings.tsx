@@ -1,4 +1,5 @@
 import Constants from 'expo-constants'
+import { router } from 'expo-router'
 import { useSQLiteContext } from 'expo-sqlite'
 import { useState, type ReactNode } from 'react'
 import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native'
@@ -19,7 +20,7 @@ type Tab = 'settings' | 'tools'
 const VERSION = Constants.expoConfig?.version ?? '1.0.0'
 
 // Settings: prices (currency, which market, the period of price changes), scanning (condition), the app (animations,
-// vibration), the collection (export / import CSV) and about (version, sources). Tools: to come.
+// vibration), the collection (export / import CSV) and about (version, sources). Tools: the Simulator.
 export default function SettingsScreen() {
   const db = useSQLiteContext()
   const settings = useSettings()
@@ -84,11 +85,22 @@ export default function SettingsScreen() {
 
       <ScrollView showsVerticalScrollIndicator={false} style={styles.scroll} contentContainerStyle={styles.content}>
         {tab === 'tools' ? (
+          <>
+            <SectionLabel style={styles.label}>Play</SectionLabel>
+            <View style={styles.group}>
+              <Row
+                title="Simulator"
+                subtitle="Play your decks out by hand: alone, both sides yourself, or against a friend on a second phone."
+                onPress={() => router.push('/sim')}
+                trailing={<Action icon={{ ios: 'chevron.right', android: 'chevron_right' }} />}
+              />
+            </View>
           <View style={styles.soon}>
             <Icon name={{ ios: 'wrench.and.screwdriver', android: 'build' }} size={30} tintColor={Colors.goldLight} />
             <Text style={styles.soonTitle}>More tools in future versions</Text>
             <Text style={styles.soonText}>Handy tools for your collection and decks will show up here.</Text>
           </View>
+          </>
         ) : (
           <>
             <SectionLabel style={styles.label}>Prices</SectionLabel>

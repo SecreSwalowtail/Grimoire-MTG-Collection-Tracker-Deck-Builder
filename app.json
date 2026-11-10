@@ -9,7 +9,8 @@
     "userInterfaceStyle": "automatic",
     "ios": {
       "infoPlist": {
-        "NSCameraUsageDescription": "$(PRODUCT_NAME) needs access to your Camera to scan cards."
+        "NSCameraUsageDescription": "$(PRODUCT_NAME) needs access to your Camera to scan cards.",
+        "NSLocalNetworkUsageDescription": "$(PRODUCT_NAME) connects to another phone on your Wi-Fi when you play a game against someone nearby."
       }
     },
     "android": {

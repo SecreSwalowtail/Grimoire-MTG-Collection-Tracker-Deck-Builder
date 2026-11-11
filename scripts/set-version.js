@@ -1,5 +1,7 @@
-// Sets the app's version everywhere a build reads it, and the Android versionCode to the patch
-// number plus one (1.0.1 → 2, 1.0.2 → 3).
+// Sets the app's version everywhere a build reads it, and the Android versionCode to a number
+// made from all three parts (1.1.0 → 10100, 1.2.3 → 10203). Android only installs an update whose
+// versionCode is higher than the installed one's, so it has to grow with every version: counting
+// from the patch number alone gave 1.1.0 a lower code than 1.0.3, and the update was refused.
 //
 //   npm run set-version 1.0.2
 //
@@ -27,7 +29,12 @@ function editJson(file, change) {
   fs.writeFileSync(full, JSON.stringify(json, null, 2).replace(/\n/g, eol) + eol)
 }
 
-const versionCode = Number(version.split('.')[2]) + 1
+const [major, minor, patch] = version.split('.').map(Number)
+if (minor > 99 || patch > 99) {
+  console.error('The minor and patch numbers go up to 99.')
+  process.exit(1)
+}
+const versionCode = major * 10000 + minor * 100 + patch
 editJson('app.json', (app) => {
   const previous = app.expo.version
   app.expo.android ??= {}
